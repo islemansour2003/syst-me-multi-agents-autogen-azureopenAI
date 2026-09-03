@@ -295,3 +295,42 @@ def test_full_chain_with_ui_hook_survives_codeur_retry():
     assert result.approuve is True
     assert "codeur" in captured_senders
     assert captured_senders.count("codeur") == 2  # 1er jet + correction
+
+
+# --- Traçabilité (US 12) ---
+
+def test_route_populates_trace_id_on_every_route_type():
+    recherche_team = make_team("Contexte. TERMINATE", name="recherche")
+    engine = RoutingEngine(llm_config=fake_llm_config(), recherche_team_factory=lambda: recherche_team)
+
+    result = engine.route("C'est quoi Python ?")
+
+    assert result.trace_id is not None
+    assert len(result.trace_id) > 0
+
+
+def test_route_generates_distinct_trace_id_per_call():
+    recherche_team_1 = make_team("Contexte 1. TERMINATE", name="recherche")
+    recherche_team_2 = make_team("Contexte 2. TERMINATE", name="recherche")
+    teams = iter([recherche_team_1, recherche_team_2])
+    engine = RoutingEngine(llm_config=fake_llm_config(), recherche_team_factory=lambda: next(teams))
+
+    result_1 = engine.route("C'est quoi Python ?")
+    result_2 = engine.route("C'est quoi Java ?")
+
+    assert result_1.trace_id != result_2.trace_id
+
+
+def test_route_trace_id_matches_logged_entries(tmp_path):
+    from protocol.logger import CommunicationLogger
+
+    logger = CommunicationLogger(log_path=str(tmp_path / "communications.jsonl"), stdout_logging=False)
+    recherche_team = make_team("Contexte. TERMINATE", name="recherche")
+    engine = RoutingEngine(
+        llm_config=fake_llm_config(), logger=logger, recherche_team_factory=lambda: recherche_team
+    )
+
+    result = engine.route("C'est quoi Python ?")
+
+    entries = logger.find_by_trace_id(result.trace_id)
+    assert len(entries) > 0

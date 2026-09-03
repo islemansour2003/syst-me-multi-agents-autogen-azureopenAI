@@ -2,7 +2,10 @@ import json
 import os
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from protocol.structured_logging import get_structured_logger
+from protocol.tracing import get_trace_id
 
 DEFAULT_LOG_PATH = os.path.join(os.path.dirname(__file__), "..", "logs", "communications.jsonl")
 
@@ -32,12 +35,19 @@ class CommunicationLogger:
 
     Thread-safe : les écritures vers un même fichier sont sérialisées via un
     verrou partagé, même entre différentes instances de CommunicationLogger.
+
+    En plus du fichier local, chaque message est aussi émis en JSON structuré
+    sur stdout (`stdout_logging=True` par défaut) avec l'identifiant de
+    traçabilité de la requête en cours (cf. `protocol.tracing`) — c'est ce flux
+    stdout qu'Azure Container Apps capture et centralise automatiquement une
+    fois déployé, sans changement de code (US 12 : logs centralisés).
     """
 
-    def __init__(self, log_path: str = DEFAULT_LOG_PATH):
+    def __init__(self, log_path: str = DEFAULT_LOG_PATH, stdout_logging: bool = True):
         self.log_path = log_path
         os.makedirs(os.path.dirname(self.log_path) or ".", exist_ok=True)
         self._write_lock = _lock_for_path(self.log_path)
+        self._stdout_logger = get_structured_logger() if stdout_logging else None
 
     def attach(self, agent: Any) -> None:
         # Idempotent : un même agent peut être passé plusieurs fois à attach()
@@ -49,8 +59,10 @@ class CommunicationLogger:
 
     def _log_hook(self, sender: Any, message: Any, recipient: Any, silent: bool) -> Any:
         content = message.get("content") if isinstance(message, dict) else message
+        trace_id = get_trace_id()
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "trace_id": trace_id,
             "from": getattr(sender, "name", str(sender)),
             "to": getattr(recipient, "name", str(recipient)),
             "content": content,
@@ -59,6 +71,13 @@ class CommunicationLogger:
         with self._write_lock:
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(line)
+
+        if self._stdout_logger is not None:
+            self._stdout_logger.info(
+                "agent_message",
+                extra={"extra_fields": {"from": entry["from"], "to": entry["to"], "content": content}},
+            )
+
         return message
 
     def read_all(self) -> List[Dict[str, Any]]:
@@ -66,3 +85,9 @@ class CommunicationLogger:
             return []
         with open(self.log_path, "r", encoding="utf-8") as f:
             return [json.loads(line) for line in f if line.strip()]
+
+    def find_by_trace_id(self, trace_id: str) -> List[Dict[str, Any]]:
+        """Retrouve tous les messages d'une même requête (traçabilité) — utile
+        pour reconstituer le parcours complet d'une demande à travers plusieurs
+        agents, à partir de l'identifiant affiché dans l'interface."""
+        return [entry for entry in self.read_all() if entry.get("trace_id") == trace_id]
