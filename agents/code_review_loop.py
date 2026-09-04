@@ -3,7 +3,6 @@ from typing import Any, Dict, Optional
 from agents.base_agents import create_user_proxy_agent
 from agents.codeur_agent import CodeurAgent
 from agents.reviseur_agent import ReviseurAgent
-from config.azure_config import get_llm_config
 from protocol.loop_detection import LoopDetectionHook
 from protocol.memory import attach_memory_management
 
@@ -46,17 +45,19 @@ def run_code_review_loop(
     (utile pour les tests) ; sinon ils sont créés avec `llm_config` (ou la config
     Azure par défaut).
     """
-    config = llm_config or get_llm_config()
-
+    # llm_config n'est résolu (get_llm_config(), qui exige les vraies variables
+    # Azure) que si codeur/reviseur ne sont pas déjà fournis : CodeurAgent et
+    # ReviseurAgent appliquent chacun leur propre `llm_config or get_llm_config()`
+    # dans leur __init__, donc pas besoin de le calculer ici à l'avance.
     codeur = codeur or CodeurAgent(
-        llm_config=config,
+        llm_config=llm_config,
         max_consecutive_auto_reply=max_rounds,
         # Le Codeur reçoit les messages du Réviseur : il s'arrête si celui-ci approuve,
         # ou si une demande de clarification (TERMINATE) est déclenchée par le hook.
         is_termination_msg=_is_terminal,
     )
     reviseur = reviseur or ReviseurAgent(
-        llm_config=config,
+        llm_config=llm_config,
         max_consecutive_auto_reply=max_rounds,
     )
 

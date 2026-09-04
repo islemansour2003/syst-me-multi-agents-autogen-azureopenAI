@@ -10,7 +10,6 @@ from agents.codeur_agent import CodeurAgent
 from agents.planificateur_agent import PlanificateurAgent
 from agents.research_agent import build_research_team
 from agents.reviseur_agent import ReviseurAgent
-from config.azure_config import get_llm_config
 from protocol.logger import CommunicationLogger
 
 TASK_TYPES = {"plan", "code", "review", "recherche", "analyse"}
@@ -52,7 +51,12 @@ class TaskDelegator:
         team_factories: Optional[Dict[str, Callable[[], Tuple[ConversableAgent, ConversableAgent]]]] = None,
         ui_hook: Optional[Callable] = None,
     ) -> None:
-        self.llm_config = llm_config or get_llm_config()
+        # Résolu paresseusement : chaque Agent (ou team builder) applique déjà
+        # `llm_config or get_llm_config()` dans son propre constructeur, donc
+        # get_llm_config() (qui exige les vraies variables Azure) n'est appelé
+        # que si une factory par défaut est réellement invoquée — pas si
+        # agent_factories/team_factories couvre déjà le type de tâche utilisé.
+        self.llm_config = llm_config
         self.logger = logger
         self.ui_hook = ui_hook
 
