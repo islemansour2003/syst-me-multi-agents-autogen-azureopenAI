@@ -1,0 +1,39 @@
+# Secrets : ne jamais intégrer les identifiants dans l'image.
+.env
+.env.*.local
+
+# Environnements virtuels
+venv/
+.venv/
+env/
+ENV/
+
+# Git
+.git/
+.gitignore
+
+# Caches et fichiers générés
+__pycache__/
+*.pyc
+.cache/
+.pytest_cache/
+htmlcov/
+.coverage
+*.egg-info/
+dist/
+build/
+
+# Logs générés à l'exécution (recréés automatiquement par l'appli)
+logs/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Documentation (pas nécessaire à l'exécution)
+README.md
+CONTRIBUTING.md
+LICENSE

@@ -19,6 +19,7 @@ from protocol.router import (
     ROUTE_RECHERCHE_ET_ANALYSE,
     route_request,
 )
+from protocol.tracing import trace_context
 
 MAX_ROUNDS_DEFAULT = 5
 
@@ -37,6 +38,7 @@ class RoutingResult:
     approuve: Optional[bool] = None
     boucle_detectee: bool = False
     raison_boucle: Optional[str] = None
+    trace_id: Optional[str] = None
 
 
 class RoutingEngine:
@@ -120,15 +122,24 @@ class RoutingEngine:
     # --- Point d'entrée ---
 
     def route(self, demande: str) -> RoutingResult:
-        decision = route_request(demande)
+        # Un identifiant de traçabilité par requête (US 12) : tous les logs
+        # émis pendant le traitement (par n'importe lequel des agents
+        # mobilisés) porteront cet identifiant, pour pouvoir reconstituer tout
+        # le parcours d'une demande a posteriori (cf. CommunicationLogger.find_by_trace_id).
+        with trace_context() as trace_id:
+            decision = route_request(demande)
 
-        if decision.route == ROUTE_RECHERCHE:
-            return self._run_recherche_only(demande)
-        if decision.route == ROUTE_ANALYSE:
-            return self._run_analyse_only(demande, decision.needs.donnees_numeriques)
-        if decision.route == ROUTE_RECHERCHE_ET_ANALYSE:
-            return self._run_recherche_et_analyse(demande, decision.needs.donnees_numeriques)
-        return self._run_full_chain(demande)
+            if decision.route == ROUTE_RECHERCHE:
+                result = self._run_recherche_only(demande)
+            elif decision.route == ROUTE_ANALYSE:
+                result = self._run_analyse_only(demande, decision.needs.donnees_numeriques)
+            elif decision.route == ROUTE_RECHERCHE_ET_ANALYSE:
+                result = self._run_recherche_et_analyse(demande, decision.needs.donnees_numeriques)
+            else:
+                result = self._run_full_chain(demande)
+
+            result.trace_id = trace_id
+            return result
 
     # --- Raccourcis (pas de code demandé) ---
 
