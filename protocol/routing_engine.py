@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -19,6 +20,7 @@ from protocol.router import (
     ROUTE_RECHERCHE_ET_ANALYSE,
     route_request,
 )
+from protocol.token_budget import TokenBudgetManager
 from protocol.tracing import trace_context
 
 MAX_ROUNDS_DEFAULT = 5
@@ -79,12 +81,21 @@ class RoutingEngine:
         codeur_factory: Optional[Callable[[], CodeurAgent]] = None,
         analyste_factory: Optional[Callable[[], AnalysteAgent]] = None,
         reviseur_factory: Optional[Callable[[], ReviseurAgent]] = None,
+        token_budget: Optional[TokenBudgetManager] = None,
     ) -> None:
         self.llm_config = llm_config or get_llm_config()
         self.ui_hook = ui_hook
         self.logger = logger
         self.max_rounds = max_rounds
         self.similarity_threshold = similarity_threshold
+        # Dépassement du budget de tokens (erreurs 429) : le code et les rapports
+        # embarqués dans les messages grossissent à chaque tour de la boucle
+        # Codeur <-> Réviseur. On les borne (troncature explicite, pas de perte
+        # silencieuse) avant de les réinjecter, plutôt que de laisser la requête
+        # grossir indéfiniment jusqu'à dépasser la limite du déploiement.
+        self.token_budget = token_budget or TokenBudgetManager(
+            max_tokens_per_request=int(os.getenv("TOKEN_BUDGET_PER_MESSAGE", 6000))
+        )
 
         self._recherche_team_factory = recherche_team_factory or (
             lambda: build_research_team(llm_config=self.llm_config)
@@ -209,15 +220,15 @@ class RoutingEngine:
                 "get_statistics et detect_anomalies (non disponibles dans ce "
                 "contexte) et applique directement ton raisonnement en chaîne "
                 "pour évaluer la qualité et la correction du code suivant, puis "
-                f"rédige ton rapport habituel :\n\n{code}"
+                f"rédige ton rapport habituel :\n\n{self.token_budget.bound(code)}"
             )
             rapport_analyse = self._one_shot(analyste, message_analyse)
             steps.append(ChainStep("analyse", rapport_analyse))
 
             # Réviseur : rend son verdict EN S'APPUYANT sur le rapport d'Analyse.
             message_revue = (
-                f"Voici le code à relire :\n\n{code}\n\n"
-                f"[Rapport de l'agent Analyste]\n{rapport_analyse}\n\n"
+                f"Voici le code à relire :\n\n{self.token_budget.bound(code)}\n\n"
+                f"[Rapport de l'agent Analyste]\n{self.token_budget.bound(rapport_analyse)}\n\n"
                 "Tiens compte de ce rapport pour ta décision finale."
             )
             proxy = create_user_proxy_agent(name=f"proxy_reviseur_{round_num}", max_consecutive_auto_reply=1)
@@ -232,8 +243,8 @@ class RoutingEngine:
 
             # Rejeté : le Codeur corrige en tenant compte du verdict du Réviseur.
             message_correction = (
-                f"Voici le code précédent :\n\n{code}\n\n"
-                f"Retours du Réviseur à corriger :\n{verdict}\n\n"
+                f"Voici le code précédent :\n\n{self.token_budget.bound(code)}\n\n"
+                f"Retours du Réviseur à corriger :\n{self.token_budget.bound(verdict)}\n\n"
                 "Corrige le code en conséquence."
             )
             code = self._one_shot(codeur, message_correction)

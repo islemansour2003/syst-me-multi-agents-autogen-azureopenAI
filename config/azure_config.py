@@ -33,6 +33,12 @@ def get_llm_config() -> dict:
             # Timeout par appel LLM (openai.APITimeoutError au-delà) : évite qu'un
             # appel bloqué ne fasse planter/geler un orchestrateur multi-agents.
             "timeout": float(os.getenv("LLM_TIMEOUT_SECONDS", 60)),
+            # Dépassement du budget de tokens (erreurs 429) : "max_retries" est un
+            # paramètre du client openai.AzureOpenAI lui-même (pas une invention
+            # d'AutoGen) — le SDK réessaie alors automatiquement avec un backoff
+            # exponentiel (en respectant l'en-tête Retry-After renvoyé par Azure)
+            # au lieu de laisser planter l'appel dès la première erreur 429.
+            "max_retries": int(os.getenv("LLM_MAX_RETRIES", 5)),
         }
     ]
 
