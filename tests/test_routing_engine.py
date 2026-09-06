@@ -10,6 +10,7 @@ from agents.planificateur_agent import PlanificateurAgent
 from agents.reviseur_agent import ReviseurAgent
 from protocol.router import ROUTE_ANALYSE, ROUTE_DEVELOPPEMENT, ROUTE_RECHERCHE, ROUTE_RECHERCHE_ET_ANALYSE
 from protocol.routing_engine import RoutingEngine
+from protocol.token_budget import TokenBudgetManager
 from tests.fake_model_client import FakeModelClient, fake_llm_config
 
 
@@ -233,6 +234,39 @@ def test_full_chain_retries_codeur_when_reviseur_rejects_then_approves():
     deuxieme_message = codeur_client.received_messages[1][-1]["content"]
     assert "Il manque une gestion d'erreur pour b == 0." in deuxieme_message
     assert "version_1" in deuxieme_message
+
+
+def test_full_chain_bounds_growing_code_with_token_budget():
+    # Bug "dépassement du budget de tokens" : sans bornage, le code (ici
+    # volontairement énorme) serait réinjecté tel quel dans le message envoyé
+    # au Réviseur puis au Codeur, grossissant sans limite au fil des tours.
+    recherche_team = make_team("Contexte. TERMINATE", name="recherche")
+    gros_code = "```python\n" + ("x = 1\n" * 5000) + "```"
+    codeur = make_cycling_agent(CodeurAgent, [gros_code, "```python\ncorrige\n```"])
+    reviseur = make_cycling_agent(ReviseurAgent, ["Il manque quelque chose.", "CODE_APPROUVE"])
+    engine = RoutingEngine(
+        llm_config=fake_llm_config(),
+        max_rounds=5,
+        token_budget=TokenBudgetManager(max_tokens_per_request=50),
+        recherche_team_factory=lambda: recherche_team,
+        planificateur_factory=lambda: make_agent(PlanificateurAgent, "1. Étape\nTERMINATE"),
+        codeur_factory=lambda: codeur,
+        analyste_factory=lambda: make_agent(AnalysteAgent, "### Rapport d'Analyse\nTERMINATE"),
+        reviseur_factory=lambda: reviseur,
+    )
+
+    engine.route("Écris une fonction Python.")
+
+    reviseur_client = reviseur.client._clients[0]
+    message_envoye_au_reviseur = reviseur_client.received_messages[0][-1]["content"]
+    assert "tronqué" in message_envoye_au_reviseur
+    assert len(message_envoye_au_reviseur) < len(gros_code)
+
+    # Le message de correction envoyé au Codeur au 2e tour doit lui aussi être borné.
+    codeur_client = codeur.client._clients[0]
+    message_correction = codeur_client.received_messages[1][-1]["content"]
+    assert "tronqué" in message_correction
+    assert len(message_correction) < len(gros_code)
 
 
 def test_full_chain_stops_at_max_rounds_when_feedback_keeps_varying_without_approval():
